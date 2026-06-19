@@ -34,6 +34,8 @@ const productModal = document.querySelector(".product-modal");
 const modalVariant = document.querySelector("#product-modal-variant");
 const modalQuantity = document.querySelector("#product-modal-quantity");
 const modalAddButton = document.querySelector("#product-modal-add");
+const modalMedia = document.querySelector("#product-modal-image");
+const modalMediaThumbnails = document.querySelector("#product-media-thumbnails");
 const toast = document.querySelector(".toast");
 let toastTimer;
 
@@ -75,6 +77,15 @@ const PRODUCT_FIELDS = `
   availableForSale
   featuredImage { url altText width height }
   images(first: 10) { nodes { url altText width height } }
+  media(first: 50) {
+    nodes {
+      alt
+      mediaContentType
+      previewImage { url altText width height }
+      ... on MediaImage { image { url altText width height } }
+      ... on Video { sources { url mimeType format width height } }
+    }
+  }
   priceRange { minVariantPrice { amount currencyCode } }
   variants(first: 100) {
     nodes {
@@ -154,6 +165,63 @@ function productCategoryLabel(product) {
 function variantLabel(variant) {
   if (!variant || variant.title === "Default Title") return "Standard";
   return variant.selectedOptions?.map((option) => option.value).join(" / ") || variant.title;
+}
+
+function productMedia(product) {
+  const media = (product.media?.nodes || []).map((item) => {
+    const image = item.image || item.previewImage;
+    if (item.mediaContentType === "VIDEO") {
+      const source = item.sources?.find((candidate) => candidate.mimeType?.startsWith("video/")) || item.sources?.[0];
+      if (source?.url) return { type: "video", url: source.url, preview: image?.url, alt: item.alt || image?.altText || product.title };
+    }
+    if (image?.url) return { type: "image", url: image.url, preview: image.url, alt: item.alt || image.altText || product.title };
+    return null;
+  }).filter(Boolean);
+
+  if (media.length) return media;
+  return [product.featuredImage, ...(product.images?.nodes || [])]
+    .filter(Boolean)
+    .filter((image, index, images) => images.findIndex((candidate) => candidate.url === image.url) === index)
+    .map((image) => ({ type: "image", url: image.url, preview: image.url, alt: image.altText || product.title }));
+}
+
+function renderActiveProductMedia(media, index) {
+  const activeMedia = media[index];
+  if (!activeMedia) {
+    modalMedia.innerHTML = "";
+    return;
+  }
+
+  modalMedia.innerHTML = activeMedia.type === "video"
+    ? `<video autoplay muted loop playsinline preload="metadata" aria-label="${escapeHtml(activeMedia.alt)}"><source src="${escapeHtml(activeMedia.url)}" type="video/mp4"></video>`
+    : `<img src="${escapeHtml(activeMedia.url)}" alt="${escapeHtml(activeMedia.alt)}" loading="eager">`;
+  modalMedia.querySelector("video")?.play().catch(() => {});
+}
+
+function renderProductMediaGallery(product, activeIndex = 0) {
+  const media = productMedia(product);
+  const selectedIndex = Math.min(Math.max(activeIndex, 0), Math.max(media.length - 1, 0));
+  productModal.dataset.activeMediaIndex = String(selectedIndex);
+  renderActiveProductMedia(media, selectedIndex);
+  modalMediaThumbnails.innerHTML = media.map((item, index) => `
+    <button class="product-media-thumbnail ${index === selectedIndex ? "active" : ""}" type="button" data-media-index="${index}" aria-label="View ${item.type === "video" ? "video" : "image"} ${index + 1}" aria-pressed="${index === selectedIndex}">
+      ${item.preview ? `<img src="${escapeHtml(item.preview)}" alt="" loading="lazy">` : `<span>${item.type === "video" ? "Video" : "Media"}</span>`}
+      ${item.type === "video" ? '<span class="media-play" aria-hidden="true">▶</span>' : ""}
+    </button>
+  `).join("");
+}
+
+function setActiveProductMedia(index) {
+  if (!state.selectedProduct) return;
+  const media = productMedia(state.selectedProduct);
+  if (!media[index]) return;
+  productModal.dataset.activeMediaIndex = String(index);
+  renderActiveProductMedia(media, index);
+  modalMediaThumbnails.querySelectorAll("[data-media-index]").forEach((thumbnail) => {
+    const active = Number(thumbnail.dataset.mediaIndex) === index;
+    thumbnail.classList.toggle("active", active);
+    thumbnail.setAttribute("aria-pressed", String(active));
+  });
 }
 
 function renderProductCard(product) {
@@ -424,10 +492,7 @@ function openProductModal(productId) {
   document.querySelector("#product-modal-title").textContent = product.title;
   document.querySelector("#product-modal-description").innerHTML =
     product.descriptionHtml || `<p>${escapeHtml(product.description || "Details coming soon.")}</p>`;
-  const image = product.featuredImage || product.images.nodes[0];
-  document.querySelector("#product-modal-image").innerHTML = image
-    ? `<img src="${escapeHtml(image.url)}" alt="${escapeHtml(image.altText || product.title)}">`
-    : "";
+  renderProductMediaGallery(product);
   modalVariant.innerHTML = product.variants.nodes.map((variant) => `
     <option value="${escapeHtml(variant.id)}" ${variant.availableForSale ? "" : "disabled"}>
       ${escapeHtml(variantLabel(variant))}${variant.availableForSale ? ` — ${formatMoney(variant.price)}` : " — Sold out"}
@@ -453,12 +518,16 @@ function updateProductModalVariant() {
   modalAddButton.disabled = !variant?.availableForSale;
   modalAddButton.firstChild.textContent = variant?.availableForSale ? "Add to cart " : "Sold out ";
   if (variant?.image) {
-    document.querySelector("#product-modal-image").innerHTML =
-      `<img src="${escapeHtml(variant.image.url)}" alt="${escapeHtml(variant.image.altText || state.selectedProduct.title)}">`;
+    const mediaIndex = productMedia(state.selectedProduct).findIndex((item) => item.url === variant.image.url);
+    if (mediaIndex >= 0) setActiveProductMedia(mediaIndex);
   }
 }
 
 modalVariant.addEventListener("change", updateProductModalVariant);
+modalMediaThumbnails.addEventListener("click", (event) => {
+  const thumbnail = event.target.closest("[data-media-index]");
+  if (thumbnail) setActiveProductMedia(Number(thumbnail.dataset.mediaIndex));
+});
 document.querySelectorAll("[data-modal-quantity]").forEach((button) => {
   button.addEventListener("click", () => {
     const next = Math.max(1, Number(modalQuantity.value || 1) + Number(button.dataset.modalQuantity));
