@@ -719,11 +719,6 @@ navigation.querySelectorAll("a").forEach((link) => {
   });
 });
 
-const fileInput = document.querySelector("#inspiration-file");
-fileInput.addEventListener("change", () => {
-  document.querySelector(".file-name").textContent = fileInput.files[0]?.name || "Upload an image";
-});
-
 function handleForm(form) {
   form.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -733,7 +728,6 @@ function handleForm(form) {
     submit.style.opacity = ".55";
   });
 }
-handleForm(document.querySelector("#custom-form"));
 handleForm(document.querySelector("#support-form"));
 
 document.querySelector("#newsletter-form").addEventListener("submit", (event) => {
