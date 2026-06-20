@@ -17,8 +17,7 @@ const state = {
   products: { all: [], chains: [], necklaces: [], bracelets: [], watches: [] },
   currentPage: 1,
   cart: null,
-  selectedProduct: null,
-  selectedVariantId: null
+  selectedProduct: null
 };
 
 const productGrid = document.querySelector("#product-grid");
@@ -32,10 +31,9 @@ const cartLines = document.querySelector("#cart-lines");
 const cartFooter = document.querySelector("#cart-footer");
 const checkoutButton = document.querySelector("#checkout-button");
 const productModal = document.querySelector(".product-modal");
-const modalVariants = document.querySelector("#product-modal-variants");
+const modalVariant = document.querySelector("#product-modal-variant");
 const modalQuantity = document.querySelector("#product-modal-quantity");
 const modalAddButton = document.querySelector("#product-modal-add");
-const modalComparePrice = document.querySelector("#product-modal-compare-price");
 const modalMedia = document.querySelector("#product-modal-image");
 const modalMediaThumbnails = document.querySelector("#product-media-thumbnails");
 const toast = document.querySelector(".toast");
@@ -95,7 +93,6 @@ const PRODUCT_FIELDS = `
       title
       availableForSale
       price { amount currencyCode }
-      compareAtPrice { amount currencyCode }
       image { url altText }
       selectedOptions { name value }
     }
@@ -170,30 +167,6 @@ function variantLabel(variant) {
   return variant.selectedOptions?.map((option) => option.value).join(" / ") || variant.title;
 }
 
-function variantMatrixGroup(variant) {
-  const options = variant.selectedOptions || [];
-  return options.find((option) => /mm\b/i.test(option.value))?.value || options[1]?.value || options[0]?.name || "Variants";
-}
-
-function renderVariantMatrix(variants, selectedVariantId, scope) {
-  const rows = variants.reduce((groups, variant) => {
-    const group = variantMatrixGroup(variant);
-    if (!groups.has(group)) groups.set(group, []);
-    groups.get(group).push(variant);
-    return groups;
-  }, new Map());
-
-  return [...rows.entries()].map(([group, row]) => `
-    <div class="variant-matrix-row" role="group" aria-label="${escapeHtml(group)} options">
-      ${row.map((variant) => `
-        <button class="variant-matrix-button ${variant.id === selectedVariantId ? "active" : ""}" type="button" data-variant-scope="${scope}" data-variant-id="${escapeHtml(variant.id)}" aria-pressed="${variant.id === selectedVariantId}" ${variant.availableForSale ? "" : "disabled"}>
-          ${escapeHtml(variantLabel(variant))}
-        </button>
-      `).join("")}
-    </div>
-  `).join("");
-}
-
 function productMedia(product) {
   const media = (product.media?.nodes || []).map((item) => {
     const image = item.image || item.previewImage;
@@ -255,21 +228,27 @@ function renderProductCard(product) {
   const availableVariants = product.variants.nodes.filter((variant) => variant.availableForSale);
   const selectedVariant = availableVariants[0] || product.variants.nodes[0];
   const image = product.featuredImage;
+  const hasMultipleVariants = product.variants.nodes.length > 1 || product.variants.nodes[0]?.title !== "Default Title";
+  const variantOptions = product.variants.nodes.map((variant) => `
+    <option value="${escapeHtml(variant.id)}" ${variant.id === selectedVariant?.id ? "selected" : ""} ${variant.availableForSale ? "" : "disabled"}>
+      ${escapeHtml(variantLabel(variant))}${variant.availableForSale ? ` — ${formatMoney(variant.price)}` : " — Sold out"}
+    </option>
+  `).join("");
 
   return `
-    <article class="product-card reveal visible" data-product-id="${escapeHtml(product.id)}" data-selected-variant-id="${escapeHtml(selectedVariant?.id)}" tabindex="0" role="button" aria-label="View ${escapeHtml(product.title)}">
+    <article class="product-card reveal visible" data-product-id="${escapeHtml(product.id)}" tabindex="0" role="button" aria-label="View ${escapeHtml(product.title)}">
       <div class="product-image ${image ? "" : "no-image"}">
         ${image ? `<img src="${escapeHtml(image.url)}" alt="${escapeHtml(image.altText || product.title)}" loading="lazy">` : ""}
         ${product.availableForSale ? "" : '<span class="product-tag">Sold out</span>'}
       </div>
       <div class="product-info">
         <div><p>${escapeHtml(productCategoryLabel(product))}</p><h3>${escapeHtml(product.title)}</h3></div>
-        <span class="product-card-price">${formatMoney(selectedVariant?.price || product.priceRange.minVariantPrice)}</span>
+        <span>From ${formatMoney(product.priceRange.minVariantPrice)}</span>
       </div>
       <div class="product-actions">
-        <div class="variant-matrix card-variant-matrix" role="radiogroup" aria-label="Choose a variant for ${escapeHtml(product.title)}">
-          ${renderVariantMatrix(product.variants.nodes, selectedVariant?.id, "card")}
-        </div>
+        <select class="variant-select" aria-label="Choose a variant for ${escapeHtml(product.title)}" ${hasMultipleVariants ? "" : 'aria-hidden="true"'}>
+          ${variantOptions}
+        </select>
         <button class="add-to-cart" type="button" ${selectedVariant?.availableForSale ? "" : "disabled"}>
           ${selectedVariant?.availableForSale ? "Add to cart" : "Sold out"}
         </button>
@@ -459,35 +438,26 @@ document.querySelectorAll("[data-collection-link]").forEach((link) => {
   });
 });
 
-productGrid.addEventListener("click", async (event) => {
-  const variantButton = event.target.closest('[data-variant-scope="card"]');
-  if (variantButton) {
-    const card = variantButton.closest(".product-card");
-    const product = state.products.all.find((item) => item.id === card.dataset.productId);
-    const variant = product?.variants.nodes.find((item) => item.id === variantButton.dataset.variantId);
-    if (!variant) return;
-    card.dataset.selectedVariantId = variant.id;
-    card.querySelectorAll('[data-variant-scope="card"]').forEach((item) => {
-      const active = item.dataset.variantId === variant.id;
-      item.classList.toggle("active", active);
-      item.setAttribute("aria-pressed", String(active));
-    });
-    card.querySelector(".product-card-price").textContent = formatMoney(variant.price);
-    const button = card.querySelector(".add-to-cart");
-    button.disabled = !variant.availableForSale;
-    button.textContent = variant.availableForSale ? "Add to cart" : "Sold out";
-    return;
-  }
+productGrid.addEventListener("change", (event) => {
+  if (!event.target.matches(".variant-select")) return;
+  const card = event.target.closest(".product-card");
+  const product = state.products.all.find((item) => item.id === card.dataset.productId);
+  const variant = product?.variants.nodes.find((item) => item.id === event.target.value);
+  const button = card.querySelector(".add-to-cart");
+  button.disabled = !variant?.availableForSale;
+  button.textContent = variant?.availableForSale ? "Add to cart" : "Sold out";
+});
 
+productGrid.addEventListener("click", async (event) => {
   const button = event.target.closest(".add-to-cart");
   if (!button) {
-    if (event.target.closest("button, a")) return;
+    if (event.target.closest("select, a")) return;
     const card = event.target.closest(".product-card[data-product-id]");
     if (card) openProductModal(card.dataset.productId);
     return;
   }
   const card = button.closest(".product-card");
-  const variantId = card.dataset.selectedVariantId;
+  const variantId = card.querySelector(".variant-select").value;
   const product = state.products.all.find((item) => item.id === card.dataset.productId);
   button.disabled = true;
   button.textContent = "Adding...";
@@ -523,9 +493,13 @@ function openProductModal(productId) {
   document.querySelector("#product-modal-description").innerHTML =
     product.descriptionHtml || `<p>${escapeHtml(product.description || "Details coming soon.")}</p>`;
   renderProductMediaGallery(product);
+  modalVariant.innerHTML = product.variants.nodes.map((variant) => `
+    <option value="${escapeHtml(variant.id)}" ${variant.availableForSale ? "" : "disabled"}>
+      ${escapeHtml(variantLabel(variant))}${variant.availableForSale ? ` — ${formatMoney(variant.price)}` : " — Sold out"}
+    </option>
+  `).join("");
   const availableVariant = product.variants.nodes.find((variant) => variant.availableForSale);
-  state.selectedVariantId = (availableVariant || product.variants.nodes[0])?.id || null;
-  modalVariants.innerHTML = renderVariantMatrix(product.variants.nodes, state.selectedVariantId, "modal");
+  if (availableVariant) modalVariant.value = availableVariant.id;
   modalQuantity.value = "1";
   updateProductModalVariant();
   document.body.classList.add("product-open");
@@ -541,11 +515,8 @@ function closeProductModal() {
 }
 
 function updateProductModalVariant() {
-  const variant = state.selectedProduct?.variants.nodes.find((item) => item.id === state.selectedVariantId);
+  const variant = state.selectedProduct?.variants.nodes.find((item) => item.id === modalVariant.value);
   document.querySelector("#product-modal-price").textContent = formatMoney(variant?.price);
-  const showCompareAtPrice = Number(variant?.compareAtPrice?.amount) > Number(variant?.price?.amount);
-  modalComparePrice.hidden = !showCompareAtPrice;
-  modalComparePrice.textContent = showCompareAtPrice ? formatMoney(variant.compareAtPrice) : "";
   modalAddButton.disabled = !variant?.availableForSale;
   modalAddButton.firstChild.textContent = variant?.availableForSale ? "Add to cart " : "Sold out ";
   if (variant?.image) {
@@ -554,17 +525,7 @@ function updateProductModalVariant() {
   }
 }
 
-modalVariants.addEventListener("click", (event) => {
-  const button = event.target.closest('[data-variant-scope="modal"]');
-  if (!button) return;
-  state.selectedVariantId = button.dataset.variantId;
-  modalVariants.querySelectorAll("[data-variant-id]").forEach((item) => {
-    const active = item.dataset.variantId === state.selectedVariantId;
-    item.classList.toggle("active", active);
-    item.setAttribute("aria-pressed", String(active));
-  });
-  updateProductModalVariant();
-});
+modalVariant.addEventListener("change", updateProductModalVariant);
 modalMediaThumbnails.addEventListener("click", (event) => {
   const thumbnail = event.target.closest("[data-media-index]");
   if (thumbnail) setActiveProductMedia(Number(thumbnail.dataset.mediaIndex));
@@ -579,7 +540,7 @@ modalQuantity.addEventListener("change", () => {
   modalQuantity.value = String(Math.max(1, Math.floor(Number(modalQuantity.value) || 1)));
 });
 modalAddButton.addEventListener("click", async () => {
-  const variant = state.selectedProduct?.variants.nodes.find((item) => item.id === state.selectedVariantId);
+  const variant = state.selectedProduct?.variants.nodes.find((item) => item.id === modalVariant.value);
   if (!variant?.availableForSale) return;
   const quantity = Math.max(1, Math.floor(Number(modalQuantity.value) || 1));
   modalAddButton.disabled = true;
