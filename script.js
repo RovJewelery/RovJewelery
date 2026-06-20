@@ -503,12 +503,14 @@ function openProductModal(productId) {
   modalQuantity.value = "1";
   updateProductModalVariant();
   document.body.classList.add("product-open");
+  if (window.matchMedia("(max-width: 1023px)").matches) document.body.style.overflow = "hidden";
   productModal.setAttribute("aria-hidden", "false");
   document.querySelector(".product-modal-close").focus();
 }
 
 function closeProductModal() {
   document.body.classList.remove("product-open");
+  document.body.style.overflow = "";
   productModal.setAttribute("aria-hidden", "true");
 }
 
